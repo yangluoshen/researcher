@@ -1,4 +1,7 @@
-from typing import Any, Dict, List
+import os
+import json
+import httpx
+from typing import Any, Dict, List, Optional
 from langchain_core.messages import AnyMessage, AIMessage, HumanMessage
 
 
@@ -19,20 +22,159 @@ def get_research_topic(messages: List[AnyMessage]) -> str:
     return research_topic
 
 
-def resolve_urls(urls_to_resolve: List[Any], id: int) -> Dict[str, str]:
+async def search_web(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
     """
-    Create a map of the vertex ai search urls (very long) to a short url with a unique id for each url.
-    Ensures each original URL gets a consistent shortened form while maintaining uniqueness.
+    Search the web using SearXNG or fallback search engines.
+    
+    Args:
+        query: Search query string
+        max_results: Maximum number of results to return
+        
+    Returns:
+        List of search results with title, url, and content
     """
-    prefix = f"https://vertexaisearch.cloud.google.com/id/"
-    urls = [site.web.uri for site in urls_to_resolve]
+    # Check for custom SearXNG instance from environment
+    custom_searxng = os.getenv("SEARXNG_URL")
+    
+    # Default SearXNG instances (you can run your own instance or use public ones)
+    searxng_instances = []
+    if custom_searxng:
+        searxng_instances.append(custom_searxng)
+    
+    # Add public instances as fallback
+    searxng_instances.extend([
+        "https://searx.be",
+        "https://search.sapti.me", 
+        "https://searx.tiekoetter.com",
+        "https://searx.prvcy.eu",
+        "https://search.bus-hit.me"
+    ])
+    
+    for instance in searxng_instances:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                params = {
+                    "q": query,
+                    "format": "json",
+                    "categories": "general",
+                    "engines": os.getenv("SEARCH_ENGINES", "google,bing,duckduckgo"),
+                    "safesearch": "0",
+                    "time_range": ""
+                }
+                
+                response = await client.get(f"{instance}/search", params=params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    results = []
+                    
+                    for result in data.get("results", [])[:max_results]:
+                        results.append({
+                            "title": result.get("title", ""),
+                            "url": result.get("url", ""),
+                            "content": result.get("content", ""),
+                            "engine": result.get("engine", "searxng")
+                        })
+                    
+                    if results:
+                        print(f"Successfully retrieved {len(results)} results from {instance}")
+                        return results
+                        
+        except Exception as e:
+            print(f"SearXNG instance {instance} failed: {e}")
+            continue
+    
+    # Fallback to DuckDuckGo instant answers
+    print("Falling back to DuckDuckGo instant answers...")
+    try:
+        return await fallback_duckduckgo_search(query, max_results)
+    except Exception as e:
+        print(f"Fallback search failed: {e}")
+        return await emergency_fallback_search(query, max_results)
 
-    # Create a dictionary that maps each unique URL to its first occurrence index
+
+async def fallback_duckduckgo_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+    """
+    Fallback search using DuckDuckGo instant answer API.
+    Note: This is a simple fallback and may not return full web results.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            params = {
+                "q": query,
+                "format": "json",
+                "no_html": "1",
+                "skip_disambig": "1"
+            }
+            
+            response = await client.get("https://api.duckduckgo.com/", params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                results = []
+                
+                # Get abstract if available
+                if data.get("Abstract"):
+                    results.append({
+                        "title": data.get("Heading", query),
+                        "url": data.get("AbstractURL", "https://duckduckgo.com/"),
+                        "content": data.get("Abstract", ""),
+                        "engine": "duckduckgo"
+                    })
+                
+                # Get related topics
+                for topic in data.get("RelatedTopics", [])[:max_results-1]:
+                    if isinstance(topic, dict) and topic.get("Text"):
+                        results.append({
+                            "title": topic.get("Text", "")[:100] + "...",
+                            "url": topic.get("FirstURL", "https://duckduckgo.com/"),
+                            "content": topic.get("Text", ""),
+                            "engine": "duckduckgo"
+                        })
+                
+                if results:
+                    return results[:max_results]
+                
+    except Exception as e:
+        print(f"DuckDuckGo search failed: {e}")
+    
+    # If DuckDuckGo also fails, use emergency fallback
+    return await emergency_fallback_search(query, max_results)
+
+
+async def emergency_fallback_search(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+    """
+    Emergency fallback when all search engines fail.
+    Returns a placeholder result that indicates search failure.
+    """
+    return [{
+        "title": f"Search unavailable for: {query}",
+        "url": "https://duckduckgo.com/?q=" + query.replace(" ", "+"),
+        "content": f"Unable to fetch live search results for '{query}'. All search engines are currently unavailable. The AI will provide an answer based on its training data, but it may not include the most recent information.",
+        "engine": "fallback"
+    }]
+
+
+def resolve_urls(search_results: List[Dict[str, Any]], id: int) -> Dict[str, str]:
+    """
+    Create a map of original URLs to shortened URLs with unique identifiers.
+    
+    Args:
+        search_results: List of search results with 'url' field
+        id: Unique identifier for this search batch
+        
+    Returns:
+        Dictionary mapping original URLs to shortened URLs
+    """
     resolved_map = {}
-    for idx, url in enumerate(urls):
-        if url not in resolved_map:
-            resolved_map[url] = f"{prefix}{id}-{idx}"
-
+    
+    for idx, result in enumerate(search_results):
+        original_url = result.get("url", "")
+        if original_url and original_url not in resolved_map:
+            # Create a shortened URL reference
+            short_url = f"[{id}-{idx}]"
+            resolved_map[original_url] = short_url
+    
     return resolved_map
 
 
@@ -44,29 +186,23 @@ def insert_citation_markers(text, citations_list):
         text (str): The original text string.
         citations_list (list): A list of dictionaries, where each dictionary
                                contains 'start_index', 'end_index', and
-                               'segment_string' (the marker to insert).
-                               Indices are assumed to be for the original text.
+                               'segments' (list of citation segments).
 
     Returns:
         str: The text with citation markers inserted.
     """
-    # Sort citations by end_index in descending order.
-    # If end_index is the same, secondary sort by start_index descending.
-    # This ensures that insertions at the end of the string don't affect
-    # the indices of earlier parts of the string that still need to be processed.
+    # Sort citations by end_index in descending order to avoid index shifting
     sorted_citations = sorted(
         citations_list, key=lambda c: (c["end_index"], c["start_index"]), reverse=True
     )
 
     modified_text = text
     for citation_info in sorted_citations:
-        # These indices refer to positions in the *original* text,
-        # but since we iterate from the end, they remain valid for insertion
-        # relative to the parts of the string already processed.
         end_idx = citation_info["end_index"]
         marker_to_insert = ""
         for segment in citation_info["segments"]:
-            marker_to_insert += f" [{segment['label']}]({segment['short_url']})"
+            marker_to_insert += f" [{segment['label']}]({segment['value']})"
+        
         # Insert the citation marker at the original end_idx position
         modified_text = (
             modified_text[:end_idx] + marker_to_insert + modified_text[end_idx:]
@@ -75,92 +211,52 @@ def insert_citation_markers(text, citations_list):
     return modified_text
 
 
-def get_citations(response, resolved_urls_map):
+def create_citations_from_search_results(search_results: List[Dict[str, Any]], text: str) -> List[Dict[str, Any]]:
     """
-    Extracts and formats citation information from a Gemini model's response.
-
-    This function processes the grounding metadata provided in the response to
-    construct a list of citation objects. Each citation object includes the
-    start and end indices of the text segment it refers to, and a string
-    containing formatted markdown links to the supporting web chunks.
-
+    Create citation objects from search results for the generated text.
+    
     Args:
-        response: The response object from the Gemini model, expected to have
-                  a structure including `candidates[0].grounding_metadata`.
-                  It also relies on a `resolved_map` being available in its
-                  scope to map chunk URIs to resolved URLs.
-
+        search_results: List of search results
+        text: The generated text content
+        
     Returns:
-        list: A list of dictionaries, where each dictionary represents a citation
-              and has the following keys:
-              - "start_index" (int): The starting character index of the cited
-                                     segment in the original text. Defaults to 0
-                                     if not specified.
-              - "end_index" (int): The character index immediately after the
-                                   end of the cited segment (exclusive).
-              - "segments" (list[str]): A list of individual markdown-formatted
-                                        links for each grounding chunk.
-              - "segment_string" (str): A concatenated string of all markdown-
-                                        formatted links for the citation.
-              Returns an empty list if no valid candidates or grounding supports
-              are found, or if essential data is missing.
+        List of citation dictionaries
     """
     citations = []
-
-    # Ensure response and necessary nested structures are present
-    if not response or not response.candidates:
-        return citations
-
-    candidate = response.candidates[0]
-    if (
-        not hasattr(candidate, "grounding_metadata")
-        or not candidate.grounding_metadata
-        or not hasattr(candidate.grounding_metadata, "grounding_supports")
-    ):
-        return citations
-
-    for support in candidate.grounding_metadata.grounding_supports:
-        citation = {}
-
-        # Ensure segment information is present
-        if not hasattr(support, "segment") or support.segment is None:
-            continue  # Skip this support if segment info is missing
-
-        start_index = (
-            support.segment.start_index
-            if support.segment.start_index is not None
-            else 0
-        )
-
-        # Ensure end_index is present to form a valid segment
-        if support.segment.end_index is None:
-            continue  # Skip if end_index is missing, as it's crucial
-
-        # Add 1 to end_index to make it an exclusive end for slicing/range purposes
-        # (assuming the API provides an inclusive end_index)
-        citation["start_index"] = start_index
-        citation["end_index"] = support.segment.end_index
-
-        citation["segments"] = []
-        if (
-            hasattr(support, "grounding_chunk_indices")
-            and support.grounding_chunk_indices
-        ):
-            for ind in support.grounding_chunk_indices:
-                try:
-                    chunk = candidate.grounding_metadata.grounding_chunks[ind]
-                    resolved_url = resolved_urls_map.get(chunk.web.uri, None)
-                    citation["segments"].append(
-                        {
-                            "label": chunk.web.title.split(".")[:-1][0],
-                            "short_url": resolved_url,
-                            "value": chunk.web.uri,
-                        }
-                    )
-                except (IndexError, AttributeError, NameError):
-                    # Handle cases where chunk, web, uri, or resolved_map might be problematic
-                    # For simplicity, we'll just skip adding this particular segment link
-                    # In a production system, you might want to log this.
-                    pass
-        citations.append(citation)
+    
+    # For simplicity, create one citation covering the entire text
+    # In a more sophisticated implementation, you could analyze which parts
+    # of the text correspond to which sources
+    if search_results:
+        segments = []
+        for i, result in enumerate(search_results):
+            segments.append({
+                "label": result.get("title", f"Source {i+1}")[:50] + ("..." if len(result.get("title", "")) > 50 else ""),
+                "short_url": f"[{i}]",
+                "value": result.get("url", "")
+            })
+        
+        citations.append({
+            "start_index": 0,
+            "end_index": len(text),
+            "segments": segments
+        })
+    
     return citations
+
+
+def get_citations(response, resolved_urls_map):
+    """
+    Extracts and formats citation information from a language model's response.
+    This is a legacy function kept for compatibility.
+    
+    Args:
+        response: The response object from the language model
+        resolved_urls_map: A mapping of original URLs to shortened URLs.
+
+    Returns:
+        List of citation dictionaries
+    """
+    # This function is kept for backward compatibility
+    # Real citation creation should use create_citations_from_search_results
+    return []

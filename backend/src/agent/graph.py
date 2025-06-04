@@ -1,4 +1,5 @@
 import os
+import asyncio
 
 from agent.tools_and_schemas import SearchQueryList, Reflection
 from dotenv import load_dotenv
@@ -7,7 +8,7 @@ from langgraph.types import Send
 from langgraph.graph import StateGraph
 from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
-from google.genai import Client
+from openai import OpenAI
 
 from agent.state import (
     OverallState,
@@ -23,9 +24,10 @@ from agent.prompts import (
     reflection_instructions,
     answer_instructions,
 )
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_deepseek import ChatDeepSeek
 from agent.utils import (
-    get_citations,
+    search_web,
+    create_citations_from_search_results,
     get_research_topic,
     insert_citation_markers,
     resolve_urls,
@@ -33,18 +35,21 @@ from agent.utils import (
 
 load_dotenv()
 
-if os.getenv("GEMINI_API_KEY") is None:
-    raise ValueError("GEMINI_API_KEY is not set")
+if os.getenv("DEEPSEEK_API_KEY") is None:
+    raise ValueError("DEEPSEEK_API_KEY is not set")
 
-# Used for Google Search API
-genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Used for web search functionality
+search_client = OpenAI(
+    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    base_url="https://api.deepseek.com"
+)
 
 
 # Nodes
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates a search queries based on the User's question.
 
-    Uses Gemini 2.0 Flash to create an optimized search query for web research based on
+    Uses DeepSeek Chat to create an optimized search query for web research based on
     the User's question.
 
     Args:
@@ -60,12 +65,12 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     if state.get("initial_search_query_count") is None:
         state["initial_search_query_count"] = configurable.number_of_initial_queries
 
-    # init Gemini 2.0 Flash
-    llm = ChatGoogleGenerativeAI(
+    # init DeepSeek Chat
+    llm = ChatDeepSeek(
         model=configurable.query_generator_model,
         temperature=1.0,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
     )
     structured_llm = llm.with_structured_output(SearchQueryList)
 
@@ -93,9 +98,9 @@ def continue_to_web_research(state: QueryGenerationState):
 
 
 def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that performs web research using the native Google Search API tool.
+    """LangGraph node that performs web research using SearXNG and other search engines.
 
-    Executes a web search using the native Google Search API tool in combination with Gemini 2.0 Flash.
+    Executes a web search using real search engines and synthesizes the results with DeepSeek Chat.
 
     Args:
         state: Current graph state containing the search query and research loop count
@@ -106,28 +111,62 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     """
     # Configure
     configurable = Configuration.from_runnable_config(config)
+    
+    # Perform actual web search
+    try:
+        # Use asyncio to run the async search function
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        search_results = loop.run_until_complete(search_web(state["search_query"], max_results=5))
+        loop.close()
+    except Exception as e:
+        print(f"Search failed: {e}")
+        search_results = []
+    
+    # Prepare context from search results
+    search_context = ""
+    for i, result in enumerate(search_results):
+        search_context += f"Source {i+1}: {result['title']}\n"
+        search_context += f"URL: {result['url']}\n"
+        search_context += f"Content: {result['content']}\n\n"
+    
+    # Format the prompt for DeepSeek to synthesize the search results
     formatted_prompt = web_searcher_instructions.format(
         current_date=get_current_date(),
         research_topic=state["search_query"],
     )
+    
+    # Add search context to the prompt
+    enhanced_prompt = f"""{formatted_prompt}
 
-    # Uses the google genai client as the langchain client doesn't return grounding metadata
-    response = genai_client.models.generate_content(
+Based on the following search results, provide a comprehensive analysis:
+
+{search_context}
+
+Please synthesize this information into a coherent summary that addresses the research topic: {state["search_query"]}
+"""
+
+    # Use DeepSeek Chat to synthesize search results
+    llm = ChatDeepSeek(
         model=configurable.query_generator_model,
-        contents=formatted_prompt,
-        config={
-            "tools": [{"google_search": {}}],
-            "temperature": 0,
-        },
+        temperature=0,
+        max_retries=2,
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
     )
-    # resolve the urls to short urls for saving tokens and time
-    resolved_urls = resolve_urls(
-        response.candidates[0].grounding_metadata.grounding_chunks, state["id"]
-    )
-    # Gets the citations and adds them to the generated text
-    citations = get_citations(response, resolved_urls)
-    modified_text = insert_citation_markers(response.text, citations)
-    sources_gathered = [item for citation in citations for item in citation["segments"]]
+    
+    # Generate search-based response
+    response = llm.invoke([{"role": "user", "content": enhanced_prompt}])
+    
+    # Create proper citations from search results
+    citations = create_citations_from_search_results(search_results, response.content)
+    
+    # Insert citation markers into the response
+    modified_text = insert_citation_markers(response.content, citations)
+    
+    # Extract sources for the overall state
+    sources_gathered = []
+    for citation in citations:
+        sources_gathered.extend(citation["segments"])
 
     return {
         "sources_gathered": sources_gathered,
@@ -153,7 +192,7 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
     configurable = Configuration.from_runnable_config(config)
     # Increment the research loop count and get the reasoning model
     state["research_loop_count"] = state.get("research_loop_count", 0) + 1
-    reasoning_model = state.get("reasoning_model") or configurable.reasoning_model
+    reasoning_model = state.get("reasoning_model") or configurable.reflection_model
 
     # Format the prompt
     current_date = get_current_date()
@@ -163,11 +202,11 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
         summaries="\n\n---\n\n".join(state["web_research_result"]),
     )
     # init Reasoning Model
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatDeepSeek(
         model=reasoning_model,
         temperature=1.0,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
     )
     result = llm.with_structured_output(Reflection).invoke(formatted_prompt)
 
@@ -231,7 +270,7 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
         Dictionary with state update, including running_summary key containing the formatted final summary with sources
     """
     configurable = Configuration.from_runnable_config(config)
-    reasoning_model = state.get("reasoning_model") or configurable.reasoning_model
+    reasoning_model = state.get("reasoning_model") or configurable.answer_model
 
     # Format the prompt
     current_date = get_current_date()
@@ -241,22 +280,23 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
 
-    # init Reasoning Model, default to Gemini 2.5 Flash
-    llm = ChatGoogleGenerativeAI(
+    # init Reasoning Model, default to DeepSeek Reasoner
+    llm = ChatDeepSeek(
         model=reasoning_model,
         temperature=0,
         max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
     )
     result = llm.invoke(formatted_prompt)
 
-    # Replace the short urls with the original urls and add all used urls to the sources_gathered
+    # Extract unique sources and replace short URLs with full URLs
     unique_sources = []
+    seen_urls = set()
+    
     for source in state["sources_gathered"]:
-        if source["short_url"] in result.content:
-            result.content = result.content.replace(
-                source["short_url"], source["value"]
-            )
+        url = source.get("value", "")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
             unique_sources.append(source)
 
     return {

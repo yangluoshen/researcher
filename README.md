@@ -1,107 +1,156 @@
-# Gemini Fullstack LangGraph Quickstart
+# DeepSeek Fullstack LangGraph Quickstart
 
-This project demonstrates a fullstack application using a React frontend and a LangGraph-powered backend agent. The agent is designed to perform comprehensive research on a user's query by dynamically generating search terms, querying the web using Google Search, reflecting on the results to identify knowledge gaps, and iteratively refining its search until it can provide a well-supported answer with citations. This application serves as an example of building research-augmented conversational AI using LangGraph and Google's Gemini models.
+This is a quickstart for building a fullstack conversational AI using LangGraph and DeepSeek models with real web search capabilities.
 
-![Gemini Fullstack LangGraph](./app.png)
+![DeepSeek Fullstack LangGraph](./app.png)
 
 ## Features
 
-- 💬 Fullstack application with a React frontend and LangGraph backend.
-- 🧠 Powered by a LangGraph agent for advanced research and conversational AI.
-- 🔍 Dynamic search query generation using Google Gemini models.
-- 🌐 Integrated web research via Google Search API.
-- 🤔 Reflective reasoning to identify knowledge gaps and refine searches.
-- 📄 Generates answers with citations from gathered sources.
-- 🔄 Hot-reloading for both frontend and backend development during development.
+- 🎯 Multi-agent research workflow using LangGraph.
+- 🔍 Dynamic search query generation using DeepSeek models.
+- 🌐 **Real web research** with SearXNG integration and multiple fallback search engines.
+- 🧠 Smart reflection to identify knowledge gaps.
+- 📚 Source tracking and citation generation with real URLs.
+- 🚀 Production-ready with Docker deployment.
+- 💻 Beautiful React frontend with real-time streaming.
+- 🔧 Configurable effort levels and model selection.
 
-## Project Structure
+## Prerequisites
 
-The project is divided into two main directories:
+Before getting started, make sure you have the following:
 
--   `frontend/`: Contains the React application built with Vite.
--   `backend/`: Contains the LangGraph/FastAPI application, including the research agent logic.
+1.  **Docker and Docker Compose**: For containerized deployment.
+2.  **Node.js and npm**: For frontend development (if running outside Docker).
+3.  **Python 3.11+**: For backend development (if running outside Docker).
 
-## Getting Started: Development and Local Testing
+## Environment Variables
 
-Follow these steps to get the application running locally for development and testing.
+The application requires the following environment variables:
 
-**1. Prerequisites:**
+-   **`DEEPSEEK_API_KEY`**: The backend agent requires a DeepSeek API key. [Get one here](https://platform.deepseek.com/api_keys)
+-   **`LANGSMITH_API_KEY`** (optional): For LangSmith tracing and monitoring.
 
--   Node.js and npm (or yarn/pnpm)
--   Python 3.8+
--   **`GEMINI_API_KEY`**: The backend agent requires a Google Gemini API key.
-    1.  Navigate to the `backend/` directory.
-    2.  Create a file named `.env` by copying the `backend/.env.example` file.
-    3.  Open the `.env` file and add your Gemini API key: `GEMINI_API_KEY="YOUR_ACTUAL_API_KEY"`
+### Optional Search Configuration
 
-**2. Install Dependencies:**
+-   **`SEARXNG_URL`** (optional): URL of your own SearXNG instance (e.g., `https://your-searxng.example.com`)
+-   **`SEARCH_ENGINES`** (optional): Comma-separated list of search engines to use (default: `"google,bing,duckduckgo"`)
 
-**Backend:**
+## Search Engine Integration
+
+This application uses **real web search** powered by:
+
+1. **SearXNG**: Privacy-respecting metasearch engine
+   - Uses multiple public SearXNG instances as fallback
+   - You can configure your own SearXNG instance with `SEARXNG_URL`
+   - Aggregates results from Google, Bing, DuckDuckGo, and more
+
+2. **DuckDuckGo API**: Fallback for instant answers
+3. **Emergency Fallback**: Graceful degradation when all search engines are unavailable
+
+## Quick Start with Docker
+
+1.  Clone this repository: `git clone <repository-url>`
+2.  Navigate to the project directory: `cd deepseek-fullstack-langgraph-quickstart`
+3.  Create a `.env` file and add your DeepSeek API key:
+    ```bash
+    DEEPSEEK_API_KEY="YOUR_ACTUAL_API_KEY"
+    # Optional: Configure search
+    SEARXNG_URL="https://your-searxng.example.com"
+    SEARCH_ENGINES="google,bing,duckduckgo"
+    ```
+4.  Build and run with Docker Compose: `make run`
+
+The application will be available at:
+
+-   **Frontend**: <http://localhost:3000>
+-   **Backend API**: <http://localhost:8123>
+
+## How It Works
+
+The application implements a sophisticated multi-agent research workflow with **real web search**:
+
+1.  **Generate Initial Queries:** Based on your input, it generates a set of initial search queries using a DeepSeek model.
+2.  **Web Research:** For each query, it performs **real web searches** using SearXNG/search engines and then uses DeepSeek to analyze and synthesize the results.
+3.  **Reflection:** After gathering initial information, the system reflects on whether there are knowledge gaps using a DeepSeek model.
+4.  **Additional Research:** If gaps are identified, it generates follow-up queries and conducts additional web research.
+5.  **Final Synthesis:** Finally, it synthesizes all the information into a comprehensive answer with **real citations** from web sources, using a DeepSeek model.
+
+This workflow continues iteratively until the system determines it has sufficient information or reaches the maximum number of research loops.
+
+## Manual Setup (Development)
+
+If you prefer to run the application manually for development:
+
+### Backend Setup
 
 ```bash
 cd backend
-pip install .
+pip install -e .
+# or with uv:
+# uv pip install -e .
 ```
 
-**Frontend:**
+### Environment Setup
+
+Create a `.env` file in the backend directory:
 
 ```bash
-cd frontend
-npm install
+DEEPSEEK_API_KEY="your_deepseek_api_key_here"
+LANGSMITH_API_KEY="your_langsmith_api_key_here"  # Optional
+SEARXNG_URL="https://your-searxng.example.com"   # Optional
+SEARCH_ENGINES="google,bing,duckduckgo"          # Optional
 ```
 
-**3. Run Development Servers:**
-
-**Backend & Frontend:**
+### Running Development Servers
 
 ```bash
-make dev
+# Backend
+cd backend && langgraph dev
+
+# Frontend (in another terminal)
+cd frontend && npm install && npm run dev
 ```
-This will run the backend and frontend development servers.    Open your browser and navigate to the frontend development server URL (e.g., `http://localhost:5173/app`).
 
-_Alternatively, you can run the backend and frontend development servers separately. For the backend, open a terminal in the `backend/` directory and run `langgraph dev`. The backend API will be available at `http://127.0.0.1:2024`. It will also open a browser window to the LangGraph UI. For the frontend, open a terminal in the `frontend/` directory and run `npm run dev`. The frontend will be available at `http://localhost:5173`._
+### Production Deployment
 
-## How the Backend Agent Works (High-Level)
+```bash
+# Build the Docker image
+docker build -t deepseek-fullstack-langgraph -f Dockerfile .
 
-The core of the backend is a LangGraph agent defined in `backend/src/agent/graph.py`. It follows these steps:
+# Run with docker-compose
+DEEPSEEK_API_KEY=<your_deepseek_api_key> LANGSMITH_API_KEY=<your_langsmith_api_key> docker-compose up
+```
 
-![Agent Flow](./agent.png)
+## Setting Up Your Own SearXNG Instance (Optional)
 
-1.  **Generate Initial Queries:** Based on your input, it generates a set of initial search queries using a Gemini model.
-2.  **Web Research:** For each query, it uses the Gemini model with the Google Search API to find relevant web pages.
-3.  **Reflection & Knowledge Gap Analysis:** The agent analyzes the search results to determine if the information is sufficient or if there are knowledge gaps. It uses a Gemini model for this reflection process.
-4.  **Iterative Refinement:** If gaps are found or the information is insufficient, it generates follow-up queries and repeats the web research and reflection steps (up to a configured maximum number of loops).
-5.  **Finalize Answer:** Once the research is deemed sufficient, the agent synthesizes the gathered information into a coherent answer, including citations from the web sources, using a Gemini model.
+For better privacy and reliability, you can run your own SearXNG instance:
 
-## Deployment
+```bash
+# Using Docker
+docker run -d -p 8080:8080 \
+  --name searxng \
+  -v "${PWD}/searxng:/etc/searxng" \
+  -e "BASE_URL=http://localhost:8080/" \
+  searxng/searxng:latest
 
-In production, the backend server serves the optimized static frontend build. LangGraph requires a Redis instance and a Postgres database. Redis is used as a pub-sub broker to enable streaming real time output from background runs. Postgres is used to store assistants, threads, runs, persist thread state and long term memory, and to manage the state of the background task queue with 'exactly once' semantics. For more details on how to deploy the backend server, take a look at the [LangGraph Documentation](https://langchain-ai.github.io/langgraph/concepts/deployment_options/). Below is an example of how to build a Docker image that includes the optimized frontend build and the backend server and run it via `docker-compose`.
+# Then set in your .env:
+# SEARXNG_URL=http://localhost:8080
+```
 
-_Note: For the docker-compose.yml example you need a LangSmith API key, you can get one from [LangSmith](https://smith.langchain.com/settings)._
+## Model Options
 
-_Note: If you are not running the docker-compose.yml example or exposing the backend server to the public internet, you update the `apiUrl` in the `frontend/src/App.tsx` file your host. Currently the `apiUrl` is set to `http://localhost:8123` for docker-compose or `http://localhost:2024` for development._
-
-**1. Build the Docker Image:**
-
-   Run the following command from the **project root directory**:
-   ```bash
-   docker build -t gemini-fullstack-langgraph -f Dockerfile .
-   ```
-**2. Run the Production Server:**
-
-   ```bash
-   GEMINI_API_KEY=<your_gemini_api_key> LANGSMITH_API_KEY=<your_langsmith_api_key> docker-compose up
-   ```
-
-Open your browser and navigate to `http://localhost:8123/app/` to see the application. The API will be available at `http://localhost:8123`.
+- **`deepseek-chat`**: Fast, general-purpose chat model (recommended for most tasks)
+- **`deepseek-reasoner`**: Advanced reasoning model (better for complex analysis and final synthesis)
 
 ## Technologies Used
 
-- [React](https://reactjs.org/) (with [Vite](https://vitejs.dev/)) - For the frontend user interface.
-- [Tailwind CSS](https://tailwindcss.com/) - For styling.
-- [Shadcn UI](https://ui.shadcn.com/) - For components.
-- [LangGraph](https://github.com/langchain-ai/langgraph) - For building the backend research agent.
-- [Google Gemini](https://ai.google.dev/models/gemini) - LLM for query generation, reflection, and answer synthesis.
+- [DeepSeek](https://api-docs.deepseek.com/) - LLM for query generation, reflection, and answer synthesis.
+- [SearXNG](https://docs.searxng.org/) - Privacy-respecting metasearch engine for web research.
+- [LangGraph](https://langchain-ai.github.io/langgraph/) - Multi-agent orchestration framework.
+- [LangChain](https://python.langchain.com/) - LLM application framework.
+- [React](https://react.dev/) - Frontend framework.
+- [FastAPI](https://fastapi.tiangolo.com/) - Backend API framework.
+- [Docker](https://www.docker.com/) - Containerization platform.
 
 ## License
 
