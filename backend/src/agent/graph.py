@@ -24,7 +24,7 @@ from agent.prompts import (
     reflection_instructions,
     answer_instructions,
 )
-from langchain_deepseek import ChatDeepSeek
+from langchain_openai import ChatOpenAI
 from agent.utils import (
     search_web,
     create_citations_from_search_results,
@@ -35,13 +35,13 @@ from agent.utils import (
 
 load_dotenv()
 
-if os.getenv("DEEPSEEK_API_KEY") is None:
-    raise ValueError("DEEPSEEK_API_KEY is not set")
+if os.getenv("OPENROUTER_API_KEY") is None:
+    raise ValueError("OPENROUTER_API_KEY is not set")
 
 # Used for web search functionality
 search_client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com"
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1",
 )
 
 
@@ -49,7 +49,7 @@ search_client = OpenAI(
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates a search queries based on the User's question.
 
-    Uses DeepSeek Chat to create an optimized search query for web research based on
+    Create an optimized search query for web research based on
     the User's question.
 
     Args:
@@ -65,12 +65,13 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     if state.get("initial_search_query_count") is None:
         state["initial_search_query_count"] = configurable.number_of_initial_queries
 
-    # init DeepSeek Chat
-    llm = ChatDeepSeek(
+    # init OpenRouter model
+    llm = ChatOpenAI(
         model=configurable.query_generator_model,
         temperature=1.0,
         max_retries=2,
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        base_url="https://openrouter.ai/api/v1",
     )
     structured_llm = llm.with_structured_output(SearchQueryList)
 
@@ -100,7 +101,7 @@ def continue_to_web_research(state: QueryGenerationState):
 def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     """LangGraph node that performs web research using SearXNG and other search engines.
 
-    Executes a web search using real search engines and synthesizes the results with DeepSeek Chat.
+    Executes a web search using real search engines and synthesizes the results.
 
     Args:
         state: Current graph state containing the search query and research loop count
@@ -130,7 +131,7 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
         search_context += f"URL: {result['url']}\n"
         search_context += f"Content: {result['content']}\n\n"
     
-    # Format the prompt for DeepSeek to synthesize the search results
+    # Format the prompt for LLM to synthesize the search results
     formatted_prompt = web_searcher_instructions.format(
         current_date=get_current_date(),
         research_topic=state["search_query"],
@@ -146,12 +147,13 @@ Based on the following search results, provide a comprehensive analysis:
 Please synthesize this information into a coherent summary that addresses the research topic: {state["search_query"]}
 """
 
-    # Use DeepSeek Chat to synthesize search results
-    llm = ChatDeepSeek(
+    # Chat to synthesize search results
+    llm = ChatOpenAI(
         model=configurable.query_generator_model,
         temperature=0,
         max_retries=2,
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        base_url="https://openrouter.ai/api/v1",
     )
     
     # Generate search-based response
@@ -201,12 +203,13 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
         research_topic=get_research_topic(state["messages"]),
         summaries="\n\n---\n\n".join(state["web_research_result"]),
     )
-    # init Reasoning Model
-    llm = ChatDeepSeek(
+    # init Reasoning Model via OpenRouter
+    llm = ChatOpenAI(
         model=reasoning_model,
         temperature=1.0,
         max_retries=2,
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        base_url="https://openrouter.ai/api/v1",
     )
     result = llm.with_structured_output(Reflection).invoke(formatted_prompt)
 
@@ -280,12 +283,13 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
 
-    # init Reasoning Model, default to DeepSeek Reasoner
-    llm = ChatDeepSeek(
+    # init Reasoning Model via OpenRouter
+    llm = ChatOpenAI(
         model=reasoning_model,
         temperature=0,
         max_retries=2,
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        base_url="https://openrouter.ai/api/v1",
     )
     result = llm.invoke(formatted_prompt)
 

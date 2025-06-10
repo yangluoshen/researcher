@@ -9,7 +9,7 @@ help:
 	@echo "  make run             - Builds and runs the application with docker-compose"
 	@echo ""
 	@echo "Prerequisites:"
-	@echo "  - Set DEEPSEEK_API_KEY in .env file"
+	@echo "  - Set OPENROUTER_API_KEY in .env file"
 	@echo "  - Optional: Set SEARXNG_URL for custom search instance"
 	@echo "  - Optional: Set SEARCH_ENGINES for custom search engine selection"
 
@@ -28,12 +28,12 @@ dev:
 
 build:
 	@echo "Building Docker image..."
-	@docker build -t deepseek-fullstack-langgraph -f Dockerfile .
+	@docker build -t deep-research-fullstack-langgraph -f Dockerfile .
 
 run: build
 	@echo "Starting application with docker-compose..."
 	@if [ ! -f .env ]; then \
-		echo "Warning: .env file not found. Please create one with DEEPSEEK_API_KEY"; \
-		echo "Example: echo 'DEEPSEEK_API_KEY=your_key_here' > .env"; \
+		echo "Warning: .env file not found. Please create one with OPENROUTER_API_KEY"; \
+		echo "Example: echo 'OPENROUTER_API_KEY=your_key_here' > .env"; \
 	fi
 	@docker-compose up 
